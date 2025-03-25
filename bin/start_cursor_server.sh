@@ -102,8 +102,22 @@ fi
 if [ "$SSE" = true ]; then
   echo -e "${GREEN}Starting MCP server in HTTP mode on port ${PORT}...${NC}"
   echo -e "${YELLOW}Connect Cursor to http://localhost:${PORT}/sse${NC}"
-  python server.py --port $PORT
+  
+  # Check if we should run in resilient mode
+  if [ "$1" = "--resilient" ] || [ "$2" = "--resilient" ] || [ "$3" = "--resilient" ]; then
+    echo -e "${GREEN}Running in resilient mode with automatic restart${NC}"
+    exec "$SCRIPT_DIR/run_resilient_server.sh" --mode http --port $PORT
+  else
+    python server.py --port $PORT
+  fi
 else
   echo -e "${GREEN}Starting MCP server in STDIO mode...${NC}"
-  python server.py --stdio
+  
+  # Check if we should run in resilient mode
+  if [ "$1" = "--resilient" ] || [ "$2" = "--resilient" ] || [ "$3" = "--resilient" ]; then
+    echo -e "${GREEN}Running in resilient mode with automatic restart${NC}"
+    exec "$SCRIPT_DIR/run_resilient_server.sh" --mode stdio
+  else
+    python server.py --stdio
+  fi
 fi 
