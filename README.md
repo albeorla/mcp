@@ -161,6 +161,22 @@ The server provides the following tools:
 
 - `run_browser_agent(goal)` - Run a browser-use agent to achieve a specified goal
 
+#### Filesystem Tools
+
+- `tree_directory(directory_path, max_depth, show_files, show_hidden, pattern, exclude_common, custom_excludes)` - Generate a tree representation of a directory structure similar to the Unix 'tree' command
+
+#### Git Tools
+
+- `git_status(detailed)` - Show the working tree status
+- `git_log(count, show_stats, path, author, since, until)` - Show commit logs
+- `git_diff(file_path, staged, commit, compare_with)` - Show changes between commits or working tree
+- `git_branch(create, delete, remote, branch_name, base_branch)` - List, create, or delete branches
+- `git_checkout(branch_name, create, force)` - Switch branches or restore working tree files
+- `git_commit(message, all_changes, amend)` - Record changes to the repository
+- `git_push(remote, branch, force, tags)` - Update remote refs along with associated objects
+- `git_pull(remote, branch, rebase)` - Fetch from and integrate with another repository
+- `git_add(paths)` - Add file contents to the staging area
+
 ### Resources
 
 The server provides these resources:

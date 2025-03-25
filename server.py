@@ -952,6 +952,776 @@ def get_instructions() -> List[Dict[str, Any]]:
     
     return instructions
 
+@mcp.tool()
+def tree_directory(
+    directory_path: str = "",
+    max_depth: int = 3,
+    show_files: bool = True,
+    show_hidden: bool = False,
+    pattern: str = None,
+    exclude_common: bool = True,
+    custom_excludes: List[str] = None
+) -> Dict[str, Any]:
+    """
+    Generate a tree representation of a directory structure.
+    
+    Args:
+        directory_path: Path to the directory to display (empty for project root)
+        max_depth: Maximum depth to display (default: 3)
+        show_files: Whether to include files in the output (default: True)
+        show_hidden: Whether to display hidden files/directories (default: False)
+        pattern: Optional glob pattern to filter files/directories
+        exclude_common: Whether to exclude common non-source directories like __pycache__, node_modules, etc. (default: True)
+        custom_excludes: Optional list of additional patterns to exclude
+        
+    Returns:
+        Dict with tree representation and stats
+    """
+    logger.info(f"Generating tree structure for directory: {directory_path}")
+    
+    # Resolve directory path
+    if not directory_path:
+        base_path = get_project_root()
+    else:
+        base_path = os.path.join(get_project_root(), directory_path)
+    
+    if not os.path.exists(base_path) or not os.path.isdir(base_path):
+        return {
+            "success": False,
+            "message": f"Directory not found: {directory_path}"
+        }
+    
+    # Common directories/files to exclude
+    common_excludes = [
+        "__pycache__",
+        ".git",
+        "node_modules",
+        "venv",
+        ".venv",
+        "env",
+        ".env",
+        ".pytest_cache",
+        ".coverage",
+        "htmlcov",
+        "dist",
+        "build",
+        "*.pyc",
+        "*.pyo",
+        "*.pyd",
+        "*.so",
+        "*.dylib",
+        "*.dll",
+        "*.exe",
+        "*.class",
+        "*.o",
+        "*.a",
+        "*.jar"
+    ]
+    
+    # Combine exclude patterns
+    excludes = []
+    if exclude_common:
+        excludes.extend(common_excludes)
+    if custom_excludes:
+        excludes.extend(custom_excludes)
+    
+    # Stats for the tree
+    stats = {
+        "directories": 0,
+        "files": 0,
+        "total_size": 0,
+        "excluded_items": 0
+    }
+    
+    # Function to check if an item should be excluded
+    def should_exclude(name, path):
+        # Check against exclude patterns
+        if excludes:
+            import fnmatch
+            for exclude_pattern in excludes:
+                if fnmatch.fnmatch(name, exclude_pattern):
+                    return True
+        return False
+    
+    # Function to check if an item should be included
+    def should_include(name, path, is_dir=False):
+        # Skip hidden files/dirs if not requested
+        if not show_hidden and name.startswith('.'):
+            stats["excluded_items"] += 1
+            return False
+        
+        # Skip files if show_files is False
+        if not is_dir and not show_files:
+            stats["excluded_items"] += 1
+            return False
+        
+        # Check if it should be excluded by patterns
+        if should_exclude(name, path):
+            stats["excluded_items"] += 1
+            return False
+            
+        # Check pattern if provided for inclusion
+        if pattern:
+            import fnmatch
+            match = fnmatch.fnmatch(name, pattern)
+            if not match:
+                stats["excluded_items"] += 1
+            return match
+            
+        return True
+    
+    # Function to generate ASCII tree
+    def generate_tree(path, prefix="", depth=0):
+        if depth > max_depth:
+            return "│\n├── ...\n"
+            
+        result = ""
+        try:
+            items = sorted(os.listdir(path))
+        except (PermissionError, OSError):
+            return f"{prefix}├── Error: Permission denied or cannot access directory\n"
+        
+        # Filter items before processing
+        filtered_items = []
+        for item in items:
+            full_path = os.path.join(path, item)
+            is_dir = os.path.isdir(full_path)
+            if should_include(item, full_path, is_dir):
+                filtered_items.append((item, is_dir))
+        
+        # Count items that will be processed
+        count = len(filtered_items)
+        
+        for i, (item, is_dir) in enumerate(filtered_items):
+            is_last_item = i == count - 1
+            full_path = os.path.join(path, item)
+            
+            # Update stats
+            if is_dir:
+                stats["directories"] += 1
+            else:
+                stats["files"] += 1
+                try:
+                    item_size = os.path.getsize(full_path)
+                    stats["total_size"] += item_size
+                except (PermissionError, OSError):
+                    item_size = 0
+            
+            # Add to result
+            connector = "└── " if is_last_item else "├── "
+            result += f"{prefix}{connector}{item}"
+            
+            # Add size for files
+            if not is_dir and show_files:
+                try:
+                    size = os.path.getsize(full_path)
+                    size_str = f" ({size} bytes)" if size < 1024 else f" ({size/1024:.1f} KB)"
+                    result += size_str
+                except (PermissionError, OSError):
+                    result += " (size unknown)"
+                
+            result += "\n"
+            
+            # Recursively process directories
+            if is_dir and depth < max_depth:
+                next_prefix = prefix + ("    " if is_last_item else "│   ")
+                result += generate_tree(full_path, next_prefix, depth + 1)
+                
+        return result
+    
+    # Generate the tree structure
+    relative_path = os.path.relpath(base_path, get_project_root())
+    tree_output = f"{relative_path}\n" + generate_tree(base_path)
+    
+    return {
+        "success": True,
+        "tree": tree_output,
+        "stats": stats,
+        "message": f"Generated tree for {relative_path}: {stats['directories']} directories, {stats['files']} files, {stats['excluded_items']} items filtered"
+    }
+
+# ==========================================
+# GIT OPERATIONS
+# ==========================================
+
+@mcp.tool()
+def git_status(
+    detailed: bool = False
+) -> Dict[str, Any]:
+    """
+    Show the working tree status.
+    
+    Args:
+        detailed: Whether to show detailed status with untracked files
+        
+    Returns:
+        Dict with the status information
+    """
+    logger.info(f"Running git status")
+    
+    cmd = ["git", "status"]
+    if detailed:
+        cmd.append("--untracked-files=all")
+    
+    result = run_command(cmd)
+    
+    # Parse the output into structured information
+    status_info = {
+        "branch": None,
+        "is_clean": False,
+        "changes": {
+            "staged": [],
+            "not_staged": [],
+            "untracked": []
+        },
+        "raw_output": result["output"]
+    }
+    
+    if result["success"]:
+        lines = result["output"].splitlines()
+        
+        # Extract branch info
+        for line in lines:
+            if "On branch " in line:
+                status_info["branch"] = line.replace("On branch ", "").strip()
+                break
+        
+        # Check if working directory is clean
+        status_info["is_clean"] = "nothing to commit, working tree clean" in result["output"]
+        
+        # Extract changed files
+        current_section = None
+        for line in lines:
+            line = line.strip()
+            
+            if "Changes to be committed:" in line:
+                current_section = "staged"
+            elif "Changes not staged for commit:" in line:
+                current_section = "not_staged"
+            elif "Untracked files:" in line:
+                current_section = "untracked"
+            elif line.startswith("modified:") or line.startswith("new file:") or line.startswith("deleted:"):
+                parts = line.split(":", 1)
+                if len(parts) > 1 and current_section:
+                    status_info["changes"][current_section].append({
+                        "status": parts[0].strip(),
+                        "file": parts[1].strip()
+                    })
+            elif line and line[0] in ["\t", " "] and current_section == "untracked":
+                # Handle untracked files which don't have a status prefix
+                status_info["changes"]["untracked"].append({
+                    "status": "untracked",
+                    "file": line.strip()
+                })
+    
+    return {
+        "success": result["success"],
+        "message": "Git status retrieved successfully" if result["success"] else f"Error: {result['error']}",
+        "status": status_info
+    }
+
+@mcp.tool()
+def git_log(
+    count: int = 10,
+    show_stats: bool = False,
+    path: str = "",
+    author: str = "",
+    since: str = "",
+    until: str = ""
+) -> Dict[str, Any]:
+    """
+    Show commit logs.
+    
+    Args:
+        count: Number of commits to show
+        show_stats: Whether to include file change statistics
+        path: Limit log to a specific file or directory
+        author: Filter by author
+        since: Show commits more recent than a specific date
+        until: Show commits older than a specific date
+        
+    Returns:
+        Dict with the log information
+    """
+    logger.info(f"Running git log")
+    
+    cmd = ["git", "log", f"-n{count}", "--pretty=format:%H|%an|%ae|%ad|%s"]
+    
+    if show_stats:
+        cmd.append("--stat")
+    
+    if author:
+        cmd.append(f"--author={author}")
+    
+    if since:
+        cmd.append(f"--since={since}")
+    
+    if until:
+        cmd.append(f"--until={until}")
+    
+    if path:
+        cmd.append("--")
+        cmd.append(path)
+    
+    result = run_command(cmd)
+    
+    commits = []
+    if result["success"]:
+        lines = result["output"].splitlines()
+        
+        current_commit = None
+        stats = []
+        
+        for line in lines:
+            if "|" in line and not current_commit:
+                # This is a commit header
+                parts = line.split("|", 4)
+                if len(parts) == 5:
+                    current_commit = {
+                        "hash": parts[0],
+                        "author_name": parts[1],
+                        "author_email": parts[2],
+                        "date": parts[3],
+                        "message": parts[4],
+                        "stats": []
+                    }
+            elif line.strip() and current_commit:
+                if " | " in line and line.strip().startswith(" "):
+                    # This is a stats line
+                    stats.append(line.strip())
+                else:
+                    # This is likely the start of a new commit
+                    if current_commit:
+                        current_commit["stats"] = stats
+                        commits.append(current_commit)
+                        current_commit = None
+                        stats = []
+                    
+                    # Check if this is a new commit header
+                    parts = line.split("|", 4)
+                    if len(parts) == 5:
+                        current_commit = {
+                            "hash": parts[0],
+                            "author_name": parts[1],
+                            "author_email": parts[2],
+                            "date": parts[3],
+                            "message": parts[4],
+                            "stats": []
+                        }
+        
+        # Add the last commit if any
+        if current_commit:
+            current_commit["stats"] = stats
+            commits.append(current_commit)
+    
+    return {
+        "success": result["success"],
+        "message": f"Retrieved {len(commits)} commits" if result["success"] else f"Error: {result['error']}",
+        "commits": commits,
+        "raw_output": result["output"] if not result["success"] else ""
+    }
+
+@mcp.tool()
+def git_diff(
+    file_path: str = "",
+    staged: bool = False,
+    commit: str = "",
+    compare_with: str = ""
+) -> Dict[str, Any]:
+    """
+    Show changes between commits, commit and working tree, etc.
+    
+    Args:
+        file_path: Specific file to show diff for (empty for all files)
+        staged: Whether to show staged changes
+        commit: Specific commit to show diff for
+        compare_with: Compare with another commit
+        
+    Returns:
+        Dict with the diff information
+    """
+    logger.info(f"Running git diff")
+    
+    cmd = ["git", "diff"]
+    
+    if staged:
+        cmd.append("--staged")
+    
+    if commit and compare_with:
+        cmd = ["git", "diff", f"{commit}..{compare_with}"]
+    elif commit:
+        cmd = ["git", "diff", f"{commit}^..{commit}"]
+    
+    if file_path:
+        cmd.append("--")
+        cmd.append(file_path)
+    
+    result = run_command(cmd)
+    
+    # Parse the diff output to get structured information
+    files_changed = []
+    if result["success"] and result["output"]:
+        diff_blocks = result["output"].split("diff --git ")
+        # Skip the first empty item
+        if diff_blocks and not diff_blocks[0].strip():
+            diff_blocks = diff_blocks[1:]
+        
+        for block in diff_blocks:
+            if not block.strip():
+                continue
+                
+            lines = block.splitlines()
+            file_info = {
+                "old_file": None,
+                "new_file": None,
+                "changes": {
+                    "insertions": 0,
+                    "deletions": 0
+                },
+                "hunks": []
+            }
+            
+            # Extract file names
+            for line in lines:
+                if line.startswith("--- "):
+                    file_info["old_file"] = line[4:]
+                elif line.startswith("+++ "):
+                    file_info["new_file"] = line[4:]
+                    break
+            
+            # Count insertions and deletions
+            for line in lines:
+                if line.startswith("+") and not line.startswith("+++"):
+                    file_info["changes"]["insertions"] += 1
+                elif line.startswith("-") and not line.startswith("---"):
+                    file_info["changes"]["deletions"] += 1
+            
+            # Extract hunks
+            current_hunk = None
+            for line in lines:
+                if line.startswith("@@"):
+                    # Start a new hunk
+                    if current_hunk:
+                        file_info["hunks"].append(current_hunk)
+                    
+                    # Parse the hunk header
+                    # Example: @@ -1,7 +1,6 @@
+                    parts = line.split("@@", 2)
+                    if len(parts) >= 2:
+                        hunk_info = parts[1].strip()
+                        current_hunk = {
+                            "header": hunk_info,
+                            "lines": []
+                        }
+                elif current_hunk is not None:
+                    current_hunk["lines"].append(line)
+            
+            # Add the last hunk if any
+            if current_hunk:
+                file_info["hunks"].append(current_hunk)
+            
+            files_changed.append(file_info)
+    
+    return {
+        "success": result["success"],
+        "message": f"Diff shows {len(files_changed)} files changed" if result["success"] else f"Error: {result['error']}",
+        "files_changed": files_changed,
+        "raw_output": result["output"]
+    }
+
+@mcp.tool()
+def git_branch(
+    create: bool = False,
+    delete: bool = False,
+    remote: bool = False,
+    branch_name: str = "",
+    base_branch: str = ""
+) -> Dict[str, Any]:
+    """
+    List, create, or delete branches.
+    
+    Args:
+        create: Whether to create a new branch
+        delete: Whether to delete a branch
+        remote: Whether to show remote branches when listing
+        branch_name: Name of the branch to create or delete
+        base_branch: Base branch when creating a new branch
+        
+    Returns:
+        Dict with branch information
+    """
+    logger.info(f"Running git branch operation")
+    
+    if create and delete:
+        return {
+            "success": False,
+            "message": "Cannot both create and delete a branch in the same operation",
+            "branches": []
+        }
+    
+    if (create or delete) and not branch_name:
+        return {
+            "success": False,
+            "message": "Branch name is required for create or delete operations",
+            "branches": []
+        }
+    
+    if create:
+        cmd = ["git", "branch", branch_name]
+        if base_branch:
+            cmd = ["git", "checkout", "-b", branch_name, base_branch]
+    elif delete:
+        cmd = ["git", "branch", "-d", branch_name]
+    else:
+        # List branches
+        cmd = ["git", "branch"]
+        if remote:
+            cmd.append("-a")
+    
+    result = run_command(cmd)
+    
+    branches = []
+    current_branch = None
+    
+    if result["success"] and not (create or delete):
+        # Parse branch list
+        for line in result["output"].splitlines():
+            line = line.strip()
+            if not line:
+                continue
+                
+            is_current = False
+            if line.startswith("*"):
+                is_current = True
+                line = line[1:].strip()
+                current_branch = line
+            
+            branch_type = "local"
+            if line.startswith("remotes/"):
+                branch_type = "remote"
+                line = line[8:]  # Remove "remotes/"
+            
+            branches.append({
+                "name": line,
+                "is_current": is_current,
+                "type": branch_type
+            })
+    
+    return {
+        "success": result["success"],
+        "message": result["output"] if result["success"] else f"Error: {result['error']}",
+        "branches": branches,
+        "current_branch": current_branch
+    }
+
+@mcp.tool()
+def git_checkout(
+    branch_name: str,
+    create: bool = False,
+    force: bool = False
+) -> Dict[str, Any]:
+    """
+    Switch branches or restore working tree files.
+    
+    Args:
+        branch_name: Name of the branch to checkout
+        create: Whether to create a new branch
+        force: Whether to force checkout (discard local changes)
+        
+    Returns:
+        Dict with checkout result
+    """
+    logger.info(f"Running git checkout to {branch_name}")
+    
+    cmd = ["git", "checkout"]
+    
+    if create:
+        cmd.append("-b")
+    
+    if force:
+        cmd.append("-f")
+    
+    cmd.append(branch_name)
+    
+    result = run_command(cmd)
+    
+    return {
+        "success": result["success"],
+        "message": result["output"] if result["success"] else f"Error: {result['error']}",
+        "branch": branch_name if result["success"] else None
+    }
+
+@mcp.tool()
+def git_commit(
+    message: str,
+    all_changes: bool = False,
+    amend: bool = False
+) -> Dict[str, Any]:
+    """
+    Record changes to the repository.
+    
+    Args:
+        message: Commit message
+        all_changes: Whether to automatically stage all modified files
+        amend: Whether to amend the previous commit
+        
+    Returns:
+        Dict with commit result
+    """
+    logger.info(f"Running git commit")
+    
+    if not message and not amend:
+        return {
+            "success": False,
+            "message": "Commit message is required",
+            "commit_id": None
+        }
+    
+    cmd = ["git", "commit"]
+    
+    if all_changes:
+        cmd.append("-a")
+    
+    if amend:
+        cmd.append("--amend")
+        if message:
+            cmd.extend(["-m", message])
+        else:
+            cmd.append("--no-edit")
+    else:
+        cmd.extend(["-m", message])
+    
+    result = run_command(cmd)
+    
+    # Extract commit hash from output
+    commit_id = None
+    if result["success"]:
+        for line in result["output"].splitlines():
+            if line.startswith("[") and "]" in line and "commit" in line:
+                # Example: [master abcd123] Commit message
+                parts = line.split()
+                if len(parts) >= 2:
+                    commit_id = parts[1][:-1]  # Remove the trailing ]
+                break
+    
+    return {
+        "success": result["success"],
+        "message": result["output"] if result["success"] else f"Error: {result['error']}",
+        "commit_id": commit_id
+    }
+
+@mcp.tool()
+def git_push(
+    remote: str = "origin",
+    branch: str = "",
+    force: bool = False,
+    tags: bool = False
+) -> Dict[str, Any]:
+    """
+    Update remote refs along with associated objects.
+    
+    Args:
+        remote: Name of the remote
+        branch: Branch to push
+        force: Whether to force push
+        tags: Whether to push tags
+        
+    Returns:
+        Dict with push result
+    """
+    logger.info(f"Running git push to {remote}")
+    
+    cmd = ["git", "push", remote]
+    
+    if branch:
+        cmd.append(branch)
+    
+    if force:
+        cmd.append("--force")
+    
+    if tags:
+        cmd.append("--tags")
+    
+    result = run_command(cmd)
+    
+    return {
+        "success": result["success"],
+        "message": result["output"] if result["success"] else f"Error: {result['error']}",
+        "remote": remote,
+        "branch": branch
+    }
+
+@mcp.tool()
+def git_pull(
+    remote: str = "origin",
+    branch: str = "",
+    rebase: bool = False
+) -> Dict[str, Any]:
+    """
+    Fetch from and integrate with another repository or local branch.
+    
+    Args:
+        remote: Name of the remote
+        branch: Branch to pull
+        rebase: Whether to rebase instead of merge
+        
+    Returns:
+        Dict with pull result
+    """
+    logger.info(f"Running git pull from {remote}")
+    
+    cmd = ["git", "pull"]
+    
+    if rebase:
+        cmd.append("--rebase")
+    
+    cmd.append(remote)
+    
+    if branch:
+        cmd.append(branch)
+    
+    result = run_command(cmd)
+    
+    return {
+        "success": result["success"],
+        "message": result["output"] if result["success"] else f"Error: {result['error']}",
+        "remote": remote,
+        "branch": branch
+    }
+
+@mcp.tool()
+def git_add(
+    paths: List[str]
+) -> Dict[str, Any]:
+    """
+    Add file contents to the staging area.
+    
+    Args:
+        paths: List of file paths to stage
+        
+    Returns:
+        Dict with add result
+    """
+    logger.info(f"Running git add for {len(paths)} files")
+    
+    if not paths:
+        return {
+            "success": False,
+            "message": "No paths specified",
+            "files_added": []
+        }
+    
+    cmd = ["git", "add"]
+    cmd.extend(paths)
+    
+    result = run_command(cmd)
+    
+    return {
+        "success": result["success"],
+        "message": "Files staged successfully" if result["success"] else f"Error: {result['error']}",
+        "files_added": paths if result["success"] else []
+    }
+
 # ==========================================
 # SERVER STARTUP
 # ==========================================

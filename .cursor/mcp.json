@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "aerith-admin-mcp": {
+      "url": "http://localhost:8090/sse",
+      "description": "Aerith Admin MCP Server"
+    }
+  }
+} 
