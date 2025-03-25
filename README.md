@@ -46,6 +46,36 @@ python server.py --stdio
 
 This mode is designed for integration with other tools, communicating through standard input/output using JSON-RPC protocol.
 
+### Resilient Mode
+
+For production or extended development sessions, you can run the server in resilient mode, which automatically monitors the server health and restarts it if it crashes:
+
+```bash
+# Using the convenient script
+./bin/start_cursor_server.sh --resilient
+
+# Or directly using the resilient server script
+./bin/run_resilient_server.sh --mode http --port 8090
+```
+
+The resilient mode includes:
+- Continuous health monitoring
+- Automatic restart on crashes
+- Graceful shutdown handling
+- Heartbeat detection and logging
+
+### Monitoring
+
+You can manually check server health or restart it using the monitoring script:
+
+```bash
+# Check if the server is running and healthy
+./bin/monitor_server.py --check-only
+
+# Force restart the server
+./bin/monitor_server.py --force-restart
+```
+
 ## Cursor IDE Integration
 
 This MCP server is specifically designed to work with Cursor IDE. Cursor can connect to the server to utilize its capabilities directly from the editor.

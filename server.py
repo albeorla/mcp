@@ -49,11 +49,42 @@ logger.info(f"Using stdio mode: {use_stdio}")
 
 # Setup signal handlers for graceful shutdown
 def signal_handler(sig, frame):
-    logger.info(f"Received signal {sig}, shutting down...")
+    logger.info(f"Received signal {sig}, shutting down gracefully...")
+    # Allow some time for ongoing operations to complete
+    logger.info("Waiting for ongoing operations to complete (5 seconds)...")
+    time.sleep(5)
+    logger.info("Exiting now")
     sys.exit(0)
 
+# Register signal handlers for various termination signals
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
+try:
+    # SIGUSR1 might not be available on some platforms (e.g., Windows)
+    signal.signal(signal.SIGUSR1, signal_handler)
+except AttributeError:
+    logger.info("SIGUSR1 not available on this platform")
+
+# Start a heartbeat thread to periodically log that the server is still alive
+def heartbeat_thread():
+    """Thread to periodically log that the server is still alive."""
+    heartbeat_interval = 300  # 5 minutes
+    counter = 0
+    
+    while True:
+        time.sleep(30)  # Check every 30 seconds
+        counter += 1
+        
+        # Log a full heartbeat message periodically
+        if counter % (heartbeat_interval // 30) == 0:
+            logger.info(f"MCP Server Heartbeat: Still running (pid={os.getpid()})")
+
+# Start the heartbeat thread if not in a test environment
+if "pytest" not in sys.modules:
+    import threading
+    heartbeat = threading.Thread(target=heartbeat_thread, daemon=True)
+    heartbeat.start()
+    logger.info("Started heartbeat thread")
 
 try:
     # Import MCP package - try different import paths
@@ -1782,7 +1813,10 @@ if __name__ == "__main__":
                     logger.info("Found run_stdio method, calling it directly")
                     mcp.run_stdio()
                     logger.info("run_stdio completed")
-                    sys.exit(0)
+                    # Don't exit, enter a keep-alive loop instead
+                    logger.info("Entering keep-alive loop after synchronous run_stdio")
+                    while True:
+                        time.sleep(1)
                 else:
                     logger.info("run_stdio method not found, will try async mode")
             except Exception as e:
@@ -1805,7 +1839,8 @@ if __name__ == "__main__":
                         logger.info("Asyncio task completed successfully")
                     except Exception as e:
                         logger.error(f"Error in asyncio task: {e}", exc_info=True)
-                        raise
+                        # Don't re-raise, just log the error to keep the server running
+                        logger.info("Continuing despite error in asyncio task")
                 
                 logger.info("Running asyncio task with proper error handling")
                 loop.run_until_complete(run_with_error_handling())
@@ -1814,7 +1849,7 @@ if __name__ == "__main__":
                 logger.info("Entering keep-alive loop")
                 while True:
                     time.sleep(1)
-                    
+                
             except Exception as e:
                 logger.error(f"Error in asyncio event loop: {e}", exc_info=True)
                 raise
@@ -1835,13 +1870,45 @@ if __name__ == "__main__":
             
             app = mcp.sse_app()
             
-            import uvicorn
-            uvicorn.run(
-                app, 
-                host=host, 
-                port=port,
-                log_level="info"
-            )
+            # Add restart capability with retry logic
+            max_retries = 5
+            retry_count = 0
+            
+            while retry_count < max_retries:
+                try:
+                    import uvicorn
+                    logger.info(f"Starting HTTP server attempt {retry_count + 1}/{max_retries}")
+                    uvicorn.run(
+                        app, 
+                        host=host, 
+                        port=port,
+                        log_level="info"
+                    )
+                    # If uvicorn exits normally (unlikely), break out of the retry loop
+                    logger.info("HTTP server exited normally")
+                    break
+                except Exception as e:
+                    retry_count += 1
+                    logger.error(f"Error in HTTP server (attempt {retry_count}/{max_retries}): {e}", exc_info=True)
+                    
+                    if retry_count >= max_retries:
+                        logger.error(f"Maximum retry attempts ({max_retries}) reached. Giving up.")
+                        break
+                    
+                    # Exponential backoff for retries
+                    wait_time = 2 ** retry_count
+                    logger.info(f"Waiting {wait_time} seconds before restarting server...")
+                    time.sleep(wait_time)
+            
+            # If we've exhausted retries, enter a keep-alive loop anyway
+            # This gives the operator a chance to fix the issue while the process remains alive
+            if retry_count >= max_retries:
+                logger.info("Entering emergency keep-alive loop after exhausting HTTP retries")
+                while True:
+                    time.sleep(10)  # Check less frequently in this emergency mode
+                    logger.info("MCP server in emergency mode. Restart the process to try again.")
+                    
         except Exception as e:
-            logger.error(f"Error running MCP server in HTTP mode: {e}", exc_info=True)
+            logger.error(f"Critical error running MCP server in HTTP mode: {e}", exc_info=True)
+            logger.error("Server will now terminate due to critical error")
             sys.exit(1)
