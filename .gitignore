@@ -1,0 +1,52 @@
+# Python virtual environment
+venv/
+mcp-venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+.tox/
+.nox/
+.hypothesis/
+.coverage.*
+
+# Environment variables
+.env
+.env.local
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+.*.sw?
+*~
+
+# Logs
+*.log
+logs/
+
+# Browser automation artifacts
+playwright-report/
+test-results/
+.playwright/
+
+# Temporary files
+tmp/
+.DS_Store
+*.tmp
+*.bak
+*.backup
+
+# Runtime data
+.aerith/instructions/
